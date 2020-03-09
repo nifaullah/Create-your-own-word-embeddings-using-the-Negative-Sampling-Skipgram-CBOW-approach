@@ -8,7 +8,7 @@ In this project I am trying to create my own word embeddings.
 
 <b>Approach:</b> First I have put the entire dataset in the dataframe with 2 columns Review & Sentiment. I am seprately using another file to deal with all the 50K textfiles and put each of this reviews as row in the dataframe. In total I have 2 dataframes test & train. I only used the train dataset to develop the embeddings. First I cleaned the dataset and created a corpus from the dataframe. Using this corpus first I created a ContexTarget pairs for Skipgram methods, only to later realize the enormity of having to do multiple softmax regression for millions of times. I then decided based on the original paper I went ahead with Negative Sampling.
 
-<b>Scope: </b> All though the I have mainly used negative sampling approach due to memory limitations in my personal computer but I have still added the code for Skipgram(Not tested), if you have resources to develop embeddings using skipgram approach please go ahead and use the code and if you want to use the Continuous Bag of words approach, for data you can use the skipgram code, but only the data & label would interchange.
+<b>Scope: </b> All though the I have mainly used negative sampling approach due to memory limitations in my personal computer but I have still added the code for Skipgram(Not tested), if you have resources to develop embeddings using skipgram approach please go ahead and use the code and if you want to use the Continuous Bag of words approach, for data you can use the skipgram code, but the data & label would interchange.
 
 <b>Result: </b> Currently I am still training the model to develop the word embeddings, I'll update the files as I move forward.
 
