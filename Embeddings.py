@@ -7,12 +7,10 @@ Created on Mon Mar  2 17:35:43 2020
 import os
 import numpy as np
 import pandas as pd
-import glob
-import errno
+import IMDB_utils 
 import keras
 from keras.layers import Input, Embedding, Dense, Flatten
-from keras.models import Model, Sequential
-import re
+from keras.models import Model, Sequential, load_model
 from random import sample
 import tensorflow as tf
 import warnings
@@ -28,70 +26,15 @@ _unk = "<UNK>"
 _eos = "<EOS>"
 
 # =============================================================================
-# Function to create 2 dataframes each for train & test data given that the text
-# files are in same structure as downloaded (i.e) ".../aclImdb/". This method
-# uses another local method load one dataset which is used to create one
-# dataset at a time based on the path. 
-# Function doesnot take any input and returns a dictionary as output, with each
-# dataframe mapped to a string.
-# dict["train"] wil give you the training set & likewise for test. 
-# =============================================================================
-def LoadDatasets():
-    dataset_dict = {}
-    dir = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/IMDB_RNN/aclImdb/"
-    env = ["train", "test"]
-    sentiment = ["pos", "neg"]
-    all_text = "*.txt"
-    for _env in env:
-        df = pd.DataFrame()
-        for _sentiment in sentiment:
-            path = f"{dir}{_env}/{_sentiment}/{all_text}"
-            df = pd.concat([df,LoadOneDataset(path, _sentiment)])
-        dataset_dict[_env] = df
-    return dataset_dict
-            
-# =============================================================================
-# Function to read text files from the given path and create a dataframe by
-# adding each textfile as a row with it's corresponding labeled sentiment.
-# function takes 2 inputs path of the file & sentiment & returns a dataframe
-# with 2 columns review & sentiment
-# =============================================================================
-
-def LoadOneDataset(path, sentiment):
-    sentiment_dict = {"neg": 0, "pos": 1}
-    files = glob.glob(path)
-    content = []
-    
-    with open(name, 'r', encoding="utf8") as file:
-        content.append(file.readlines())
-    
-    df = pd.DataFrame(content,columns=["review"])
-    df["sentiment"] = sentiment_dict[sentiment]
-    return df
-
-# =============================================================================
-# Wrapper method to load IMDB dataset first it checks if a file is present in
-# local already, if not then builds the dataframe & saves it to local, if
-# yes loads the dataframe from the local excel file.
-# =============================================================================
-def LoadImdbDatasets():
-    _train = "train.xlsx"
-    _test = "test.xlsx"
-    if not (os.path.isfile(f"{_path}{_train}") & os.path.isfile(f"{_path}{_test}")):
-        datasets = imdb.LoadDatasets()
-        train_df = datasets["train"]
-        test_df = datasets["test"]
-        train_df.to_excel(f"{path}{_train}", index=False)
-        test_df.to_excel(f"{path}{_test}", index=False)
-    else:
-        train_df = pd.read_excel(f"{_path}{_train}")
-        test_df = pd.read_excel(f"{_path}{_test}")
-    return train_df, test_df
-
-# =============================================================================
 # Function to clean dataset before processing. Here we lower case the review
-# column and remove HTML tags and punctuations. 
+# column and remove HTML tags and punctuations. Ideally you don't want
+# prepositions or articles to be part of word vector but I will adress this in
+# future iterations.
 # Function takes dataframe as an input and returns a dataframe.
+# Input:
+#   1. df - Raw Dataframe
+# Output:
+#   1. Cleaned Dataframe
 # =============================================================================
 def CleanDataset(df):
     df = df.copy()
@@ -105,16 +48,34 @@ def CleanDataset(df):
 
 # =============================================================================
 # Function to generate the vocabulary
-# Takes dataframe as an input along with max_occurences (i.e max number of times
-# a word should appear before it can be included in the vocabulary) and returns
-# a dictionary with each word mapped to an index.
+# Takes dataframe as an input along with max_occurences (i.e max number of
+# times a word should appear before it can be included in the vocabulary) and
+# returns a dictionary with each word (key) mapped to an index (value).
+# Input:
+#   1. df - dataframe from which the vocabulary is to be generated
+#   2. max_occurences - max number of times a word should appear before it can 
+#       be included in the vocabulary
+# Output:
+#   1. Dictionary with word as key and index as value
 # =============================================================================
 def GetWord2Index(df, max_occurences=30):
     word_count = pd.Series([y for x in df.values.flatten() for y in str(x).split()]).value_counts()
     selected_words = word_count[word_count > max_occurences]
-    vocab = {x:index for index, x in enumerate(selected_words.index)}
-    vocab.update({_eos: len(vocab), _unk: len(vocab)+1})
-    return vocab
+    word2index_vocab = {x:index for index, x in enumerate(selected_words.index)}
+    word2index_vocab.update({_eos: len(vocab), _unk: len(vocab)+1})
+    return word2index_vocab
+
+# =============================================================================
+# Funtcion to reverse the dictionary with now index as key and word as value
+# Input:
+#    1. Dictionary with word as key and index as value
+# Output:
+#    1. Dictionary with index as key and word as value
+# =============================================================================
+def GetIndex2Word(word2index_vocab):
+    index2word_vocab = dict(zip(word2index_vocab.values(), word2index_vocab.keys()))
+    return index2word_vocab
+
 
 # =============================================================================
 # Function to create a locally contextualized corpus
@@ -122,7 +83,13 @@ def GetWord2Index(df, max_occurences=30):
 # text (for instance for the IMDB dataframe this will be review column typed
 # as dataframe) and another input is the name of the corpus so that the corpus
 # is saved locally and we don't have to create a corpus eachtime.
-# This function returns the corpus as a string
+# This function returns the corpus as a string.
+# Input:
+#   1. df - dataframe from which the corpus is to be generated
+#   3. name - string containing the prefix of the corpus to be retrieved
+#       from the local or to be saved to the local
+# Outputs:
+#   1. string containing entire corpus
 # =============================================================================
 def CreateCorpus(df, name=""):
     _corpusfile = "corpus.txt"
@@ -145,12 +112,40 @@ def CreateCorpus(df, name=""):
 # and window_size (integer which defines the context word around the target
 # word) and returns an integer tuple with lower bound and upper bound for the
 # context window.
+# Input:
+#   1. current_index - integer containing the index of current target word
+#   2. max_len  - integer containing number of tokens available
+#   3. window_size - integer to get neighbouring words indices based on the
+#        window
+# Outputs:
+#   1. Lower bound for contextual neighbours of a particular target word
+#   2. Upper bound for contextual neighbours of a particular target word
 # =============================================================================
 def GetWindow(current_index, max_len, window_size = 3):
     lower = max(0, current_index - window_size)
     upper = min(current_index + window_size, max_len-1) + 1
     return lower,upper
 
+# =============================================================================
+# Function to create training dataset to be fed in the neural network,following
+# the original paper input is the target word or centered word whilst the output
+# is the neighbouring words based on the window size. Input is a vector whereas
+# output is a matrix of size (token_size, window size * 2). Because of the huge
+# output size, counting in the need for one hot encoding each of those outputs,
+# the number of softmax regression to be done makes the operation quite complex,
+# as a result of which I wasn't able to test the output of this method on the
+# neural network, and I had to resort to negative sampling which is also
+# mentioned in the original paper. If one wants to use Continuos Bag Of Words
+# (CBOW) appraoch to build embeddings they can still use the method but the
+# labels & data would interchange.
+# Inputs:
+#   1. corpus - String containing entire corpus
+#   2. vocab - Dictionary with Word to Index mapping
+#   3. window_size - integer to define number of context words for each target
+# Outputs:
+#   1. X - training data with shape (# of valid tokens, 1)
+#   2. Y - training label with shape (# of valid tokens, window_size * 2)
+# =============================================================================
 def CreateSkipgramContextTargetPairs(corpus, vocab, window_size = 3):
     tokens = corpus.split()
     x = np.zeros((len(tokens),1))
@@ -176,11 +171,32 @@ def CreateSkipgramContextTargetPairs(corpus, vocab, window_size = 3):
     y = y[:rows_to_remove,]
     return x, y
 
+# =============================================================================
+# Function to create context target pairs along with negative samples,following
+# the original paper inputs are the target word and context word, neighbouring
+# words based on the window size. Input is a matrix containing n datapoints
+# with 2 features and the label/output is a vector containing binary values
+# 1 if context word is a neigbour & 0 if it's negatively sampled.
+#    
+# WARNING !!: This method will take huge amount of time to run if you're
+# running it in local PC. For my PC with 8GB RAM, to generate a dataset of
+# nearly 60 Million samples with window_size = 3 & negative_samples = 1 it took
+# close to 23 hours. After which I decided to save the  training set locally
+# and use it if it's available.
+# Inputs:
+#   1. corpus - string containing entire corpus
+#   2. vocab - dictionary with Word to Index mapping
+#   3. window_size - integer to define number of context words for each target
+#   4. neg_samples - integer to generate number of negative samples per
+#       positive sample
+# Outputs:
+#   1. X - training data with shape (# of valid tokens, 2)
+#   2. Y - training label with shape (# of valid tokens,)
+# =============================================================================
 def CreateNegativeSamplingContextTargetPairs(corpus, vocab, window_size = 3, neg_samples = 5):
     _data = "embeddings_data.npy"
     _labels = "embeddings_labels.npy"
     if os.path.isfile(f"{_path}{_data}") and os.path.isfile(f"{_path}{_labels}"):
-        print("yay")
         X = np.load(f"{_path}{_data}", allow_pickle = True)
         Y = np.load(f"{_path}{_labels}", allow_pickle = True)
         return X, Y
@@ -205,19 +221,14 @@ def CreateNegativeSamplingContextTargetPairs(corpus, vocab, window_size = 3, neg
                         neg_samples_dict[vocab[tokens[i]]].remove(vocab[tokens[j]])
     
     pos_data_length = len(match)
-    print(pos_data_length)
+    print("Positive Samples completed")
     for i in range(pos_data_length):
         print(pos_data_length-i)
-        #print(cols[i][0])
         negative_targets = sample(neg_samples_dict[cols[i][0]], neg_samples)
-        #print(negative_targets)
         match.extend(np.repeat(0, neg_samples))
         cols.extend(np.column_stack((np.repeat(cols[i][0], neg_samples), negative_targets)))
     
-    neg_data_length = len(match) - pos_data_length
-    print(pos_data_length)
-    print(neg_data_length)
-    
+    print("Negative Samples completed")
     X = np.array(cols)
     Y = np.array(match)
     
@@ -226,14 +237,36 @@ def CreateNegativeSamplingContextTargetPairs(corpus, vocab, window_size = 3, neg
     
     return X, Y
 
-def BuildModel(vocab_size, emb_size, window_size):
-    print(vocab_size)
+# =============================================================================
+# Function to build sequential model, this is essentially a basic logistic
+# regression model preceded by an embedding layer
+# Inputs:
+#   1. vocab_size - integer containing the length of the vocabulary
+#   2. emb_size - integer defining the dimension for the word vector
+# Output:
+#   1. Sequential Logistic Regression model preceded by an embedding layer
+# =============================================================================
+def BuildModel(vocab_size, emb_size):
     model = Sequential([
         Embedding(output_dim=emb_size, input_dim=vocab_size, input_length = 2),
         Flatten(input_shape=(1,2)),
         Dense(2)])
     return model
 
+# =============================================================================
+# Function of train the model, although I have given access to hyperparameters
+# such as optimizer & epochs but internally epoch is still hardcoded & this
+# along with batch_size will be accomadated in coming iterations.
+# Inputs:
+#   1. X_train - Numpy integer array with shape (# samples,2)
+#   2. Y_train - Numpy integer array with shape (# samples,)
+#   3. emb_size - integer defining the dimension for the word vector
+#   4. window_size - integer to define number of context words for each target
+#   5. epochs - integer defining # of epochs to train the model for.
+#   6. optimizer - string defining the optimizer to be used for training
+# Output:
+#   1. A trained model
+# =============================================================================
 def TrainModel(X_train, Y_train, vocab_size, emb_size = 300, window_size = 3, epochs = 1, optimizer = 'adam'):
     labels = []
     print(X_train.shape)
@@ -244,41 +277,51 @@ def TrainModel(X_train, Y_train, vocab_size, emb_size = 300, window_size = 3, ep
               metrics=['accuracy'])
     model.fit(X_train, Y_train, epochs=1, batch_size=128)
     return model
-    
-def test():
-    train_df, test_df = LoadImdbDatasets()
-    #train_df = CleanDataset(train_df)
-    #test_df = CleanDataset(test_df)
-    return train_df
 
-def BuildEmbeddings(df, max_occurences = 30, emb_size = 300, window_size = 3, epochs = 1, optimizer = 'adam'):
+# =============================================================================
+# Parent Function which will be exposed to clients who want to create their own
+# locally contextualized web embeddings. It takes the dataframe and many other
+# hyperparameters as inputs and returns the word vectors.
+# Inputs:
+#   1. df - dataframe containing only the text to be read as corpus.
+#   2. force_train - boolean, if true train the model, if not load from local
+#   3. max_occurences - max number of times a word should appear before it can 
+#       be included in the vocabulary
+#   4. emb_size - integer defining the dimension for the word vector
+#   5. window_size - integer to define number of context words for each target
+#   6. corpus_name - string containing the prefix of the corpus to be retrieved
+#       from the local or to be saved to the local
+#   7. epochs - integer defining # of epochs to train the model for.
+#   8. optimizer - string defining the optimizer to be used for training
+# Output:
+#   1. A numpy float array with shape (vocab_size, emb_size) containing the
+#       vectors for each word 
+# =============================================================================
+def BuildEmbeddings(df, force_train = False,max_occurences = 30, emb_size = 300, window_size = 3, corpus_name = "", epochs = 1, optimizer = 'adam'):
+    _model = "imdb_negative_sampling_model.h5"
+    if (os.path.isfile(f"{_path}{_model}") and not force_train):
+        model = load_model(f"{_path}{_model}")
+        return model.layers[0].get_weights()[0]
     df = CleanDataset(df)
     word2index_vocab = GetWord2Index(df,max_occurences)
-    index2word_vocab = dict(zip(word2index_vocab.values(), word2index_vocab.keys()))
-    corpus = CreateCorpus(train_df[["review"]],"imdb")
+    index2word_vocab = GetIndex2Word(word2index_vocab)
+    corpus = CreateCorpus(df,corpus_name)
     X,Y =  CreateNegativeSamplingContextTargetPairs(corpus, word2index_vocab, window_size, 1)
     model = TrainModel(X, Y, len(word2index_vocab), emb_size, epochs, optimizer)
-    return model
-    #return X, Y, word2index_vocab, index2word_vocab
-    
-train_df = test()
-
-#vocab = GetWord2Index(train_df, 30)
-#print(len(vocab))  
-#corpus = CreateCorpus(train_df[["review"]],"imdb")
-
-#X,Y, r = CreateContextTargetPairs(corpus, vocab)
-
-#model = BuildModel(len(vocab), 300, 3)
+    model.save(f"{_path}{_model}")
+    return model.layers[0].get_weights()[0]
 
 
-#X, Y , word2index_vocab, index2word_vocab =
-model = BuildEmbeddings(train_df)
+# =============================================================================
+# A sample test function to sanity check the output and also demonstrates
+# how to use the parent function minimally.
+# Output:
+#    1. returns word_vector
+# =============================================================================
+def TestEmbeddings():
+    train_df, test_df = IMDB_utils.LoadImdbDatasets()
+    word_vector = BuildEmbeddings(train_df[["review"]], corpus_name = "imdb")
+    return word_vector
 
-#word2index_vocab = GetWord2Index(train_df,30)
-#TrainModel(X, Y, len(word2index_vocab), 300, 1, 'adam')
-# k = X.shape[0]
-# x = np.zeros((k,2))
-# for i in range(k):
-#     print(k - i)
-#     x[i] = X[i].astype(int)
+# Calling the test function to check the sanity of the code
+#word_vectors = TestEmbeddings()
