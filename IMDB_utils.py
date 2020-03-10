@@ -13,8 +13,8 @@ import pandas as pd
 import glob
 import errno
 
-# Path where you want to store your dataset
-_path = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/Sentiment_Analysis_RNN_IMDB/Datasets/"
+# Path where you want to store your dataset or where the dataset is already stored
+_path = ""
 
 # =============================================================================
 # Function to create 2 dataframes each for train & test data given that the text
@@ -67,7 +67,7 @@ def LoadImdbDatasets():
     _train = "train.xlsx"
     _test = "test.xlsx"
     if not (os.path.isfile(f"{_path}{_train}") & os.path.isfile(f"{_path}{_test}")):
-        datasets = imdb.LoadDatasets()
+        datasets = LoadDatasets()
         train_df = datasets["train"]
         test_df = datasets["test"]
         train_df.to_excel(f"{path}{_train}", index=False)
