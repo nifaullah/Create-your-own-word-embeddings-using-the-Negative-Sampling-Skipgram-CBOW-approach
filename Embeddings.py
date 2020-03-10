@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Mon Mar  2 17:35:43 2020
-
 @author: nifaullah
 """
 
@@ -15,11 +14,28 @@ from keras.layers import Input, Embedding, Dense, Flatten
 from keras.models import Model, Sequential
 import re
 from random import sample
+import tensorflow as tf
+import warnings
 
+# To ignore Keras pre-emptive sparse vector warning
+# Issue mentioned here - https://github.com/matterport/Mask_RCNN/issues/749
+warnings.filterwarnings('ignore')
+# Path where you want to store your dataset
 _path = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/Sentiment_Analysis_RNN_IMDB/Datasets/"
+# Token for words not in dictionary
 _unk = "<UNK>"
+# Token to recognize end of sentence
 _eos = "<EOS>"
 
+# =============================================================================
+# Function to create 2 dataframes each for train & test data given that the text
+# files are in same structure as downloaded (i.e) ".../aclImdb/". This method
+# uses another local method load one dataset which is used to create one
+# dataset at a time based on the path. 
+# Function doesnot take any input and returns a dictionary as output, with each
+# dataframe mapped to a string.
+# dict["train"] wil give you the training set & likewise for test. 
+# =============================================================================
 def LoadDatasets():
     dataset_dict = {}
     dir = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/IMDB_RNN/aclImdb/"
@@ -34,6 +50,13 @@ def LoadDatasets():
         dataset_dict[_env] = df
     return dataset_dict
             
+# =============================================================================
+# Function to read text files from the given path and create a dataframe by
+# adding each textfile as a row with it's corresponding labeled sentiment.
+# function takes 2 inputs path of the file & sentiment & returns a dataframe
+# with 2 columns review & sentiment
+# =============================================================================
+
 def LoadOneDataset(path, sentiment):
     sentiment_dict = {"neg": 0, "pos": 1}
     files = glob.glob(path)
@@ -47,9 +70,9 @@ def LoadOneDataset(path, sentiment):
     return df
 
 # =============================================================================
-# Load data using the user created Load_IMDB_Datasets library if data is 
-# already not present as an excel in local. If you 're running this for first
-# time This will take sometime(15 -30 mins) depending on your computer memory.
+# Wrapper method to load IMDB dataset first it checks if a file is present in
+# local already, if not then builds the dataframe & saves it to local, if
+# yes loads the dataframe from the local excel file.
 # =============================================================================
 def LoadImdbDatasets():
     _train = "train.xlsx"
@@ -65,6 +88,11 @@ def LoadImdbDatasets():
         test_df = pd.read_excel(f"{_path}{_test}")
     return train_df, test_df
 
+# =============================================================================
+# Function to clean dataset before processing. Here we lower case the review
+# column and remove HTML tags and punctuations. 
+# Function takes dataframe as an input and returns a dataframe.
+# =============================================================================
 def CleanDataset(df):
     df = df.copy()
     #lower 
@@ -75,6 +103,12 @@ def CleanDataset(df):
     df.review = df.review.str.replace('[^a-zA-Z ]', '')
     return df
 
+# =============================================================================
+# Function to generate the vocabulary
+# Takes dataframe as an input along with max_occurences (i.e max number of times
+# a word should appear before it can be included in the vocabulary) and returns
+# a dictionary with each word mapped to an index.
+# =============================================================================
 def GetWord2Index(df, max_occurences=30):
     word_count = pd.Series([y for x in df.values.flatten() for y in str(x).split()]).value_counts()
     selected_words = word_count[word_count > max_occurences]
@@ -82,12 +116,18 @@ def GetWord2Index(df, max_occurences=30):
     vocab.update({_eos: len(vocab), _unk: len(vocab)+1})
     return vocab
 
+# =============================================================================
+# Function to create a locally contextualized corpus
+# Takes dataframe as an input - ideally this a column which contains all the 
+# text (for instance for the IMDB dataframe this will be review column typed
+# as dataframe) and another input is the name of the corpus so that the corpus
+# is saved locally and we don't have to create a corpus eachtime.
+# This function returns the corpus as a string
+# =============================================================================
 def CreateCorpus(df, name=""):
     _corpusfile = "corpus.txt"
-   # only_vocab_words_regex = re.compile(r'\b%s\b' % r'\b|\b'.join(map(re.escape, deleted_words)))
     if not (os.path.isfile(f"{_path}{name}_{_corpusfile}")):
         corpus = ""
-        #counter = 0
         for i in df.values:
             corpus = f"{corpus}{i[0]} {_eos} "
         textfile = open(f"{_path}{name}_{_corpusfile}", "w")
@@ -98,6 +138,14 @@ def CreateCorpus(df, name=""):
             corpus = file.read()
     return corpus
 
+# =============================================================================
+# Function to get the index of contextual words around a word to create context
+# target pairs. This takes the current_index (integer representing the current
+# word), max_len (integer indicating the max number of words in the corpus)
+# and window_size (integer which defines the context word around the target
+# word) and returns an integer tuple with lower bound and upper bound for the
+# context window.
+# =============================================================================
 def GetWindow(current_index, max_len, window_size = 3):
     lower = max(0, current_index - window_size)
     upper = min(current_index + window_size, max_len-1) + 1
@@ -152,7 +200,7 @@ def CreateNegativeSamplingContextTargetPairs(corpus, vocab, window_size = 3, neg
             for j in range(lower,upper):
                 if tokens[j] in vocab and i != j:
                     cols.append(np.array([vocab[tokens[i]], vocab[tokens[j]]], dtype=int))
-                    match.append(1)
+                    match.append(1) 
                     if vocab[tokens[j]] in neg_samples_dict[vocab[tokens[i]]]:
                         neg_samples_dict[vocab[tokens[i]]].remove(vocab[tokens[j]])
     
@@ -181,42 +229,21 @@ def CreateNegativeSamplingContextTargetPairs(corpus, vocab, window_size = 3, neg
 def BuildModel(vocab_size, emb_size, window_size):
     print(vocab_size)
     model = Sequential([
+        Embedding(output_dim=emb_size, input_dim=vocab_size, input_length = 2),
         Flatten(input_shape=(1,2)),
-        #Embedding(output_dim=emb_size, input_dim=vocab_size),
-        Dense(1)])
+        Dense(2)])
     return model
-    #main_input = Input(shape=(1,), dtype='int32', name='main_input')
-    #X = Embedding(output_dim=emb_size, input_dim=vocab_size, input_length = 1)(main_input)
-    #X = Flatten()(X)
-    #dense1 = Dense(vocab_size)(X)
-    #   x1 = keras.layers.concatenate([X, dense1])
-    # dense2 = Dense(vocab_size)(X)
-    # x2 = keras.layers.concatenate([X, dense2])
-    # dense3 = Dense(vocab_size)(X)
-    # x3 = keras.layers.concatenate([X, dense3])
-    # dense4  = Dense(vocab_size)(X)
-    # x4 = keras.layers.concatenate([X, dense4])
-    # dense5  = Dense(vocab_size)(X)
-    # x5 = keras.layers.concatenate([X, dense5])
-    # dense6  = Dense(vocab_size)(X)
-    # x6 = keras.layers.concatenate([X, dense6])
-    # model = Model(inputs=main_input, outputs=[dense1, dense2, dense3, dense4, dense5, dense6])
-    # model = Model(inputs=main_input, outputs=dense1)
-    #return model
 
 def TrainModel(X_train, Y_train, vocab_size, emb_size = 300, window_size = 3, epochs = 1, optimizer = 'adam'):
     labels = []
     print(X_train.shape)
     print(Y_train.shape)
-    model = Sequential([
-        Dense(128, activation='relu', input_shape=(2,)),
-        Dense(64, activation='relu'),
-        Dense(32, activation='relu'),
-        Dense(2)])
-    model.compile(optimizer='adam',
+    model = BuildModel(vocab_size, emb_size, window_size)
+    model.compile(optimizer= optimizer,
               loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
               metrics=['accuracy'])
-    model.fit(X_train, Y_train)
+    model.fit(X_train, Y_train, epochs=1, batch_size=128)
+    return model
     
 def test():
     train_df, test_df = LoadImdbDatasets()
@@ -224,15 +251,15 @@ def test():
     #test_df = CleanDataset(test_df)
     return train_df
 
-def BuildEmbeddings(df, max_occurences = 30, emb_size = 300, window_size = 3, epochs = 10, optimizer = 'adam'):
+def BuildEmbeddings(df, max_occurences = 30, emb_size = 300, window_size = 3, epochs = 1, optimizer = 'adam'):
     df = CleanDataset(df)
     word2index_vocab = GetWord2Index(df,max_occurences)
     index2word_vocab = dict(zip(word2index_vocab.values(), word2index_vocab.keys()))
     corpus = CreateCorpus(train_df[["review"]],"imdb")
     X,Y =  CreateNegativeSamplingContextTargetPairs(corpus, word2index_vocab, window_size, 1)
-    #X_train = np.reshape(X_train, (X_train.shape[0],1,2))
-    #TrainModel(X_train, Y_train, len(word2index_vocab), emb_size, epochs, optimizer)
-    return X, Y, word2index_vocab, index2word_vocab
+    model = TrainModel(X, Y, len(word2index_vocab), emb_size, epochs, optimizer)
+    return model
+    #return X, Y, word2index_vocab, index2word_vocab
     
 train_df = test()
 
@@ -242,10 +269,12 @@ train_df = test()
 
 #X,Y, r = CreateContextTargetPairs(corpus, vocab)
 
-#model = BuildModel(len(vocab), 300, 3)   
+#model = BuildModel(len(vocab), 300, 3)
 
 
-X, Y , word2index_vocab, index2word_vocab = BuildEmbeddings(train_df)
+#X, Y , word2index_vocab, index2word_vocab =
+model = BuildEmbeddings(train_df)
+
 #word2index_vocab = GetWord2Index(train_df,30)
 #TrainModel(X, Y, len(word2index_vocab), 300, 1, 'adam')
 # k = X.shape[0]
