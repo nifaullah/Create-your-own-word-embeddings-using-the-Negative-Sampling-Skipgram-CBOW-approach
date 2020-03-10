@@ -27,7 +27,8 @@ _path = ""
 # =============================================================================
 def LoadDatasets():
     dataset_dict = {}
-    dir = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/IMDB_RNN/aclImdb/"
+    # Directory where are text files are stored in default structure
+    dir = ".../aclImdb/"
     env = ["train", "test"]
     sentiment = ["pos", "neg"]
     all_text = "*.txt"
