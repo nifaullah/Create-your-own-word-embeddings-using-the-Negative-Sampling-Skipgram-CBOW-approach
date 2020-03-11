@@ -62,7 +62,7 @@ def GetWord2Index(df, max_occurences=30):
     word_count = pd.Series([y for x in df.values.flatten() for y in str(x).split()]).value_counts()
     selected_words = word_count[word_count > max_occurences]
     word2index_vocab = {x:index for index, x in enumerate(selected_words.index)}
-    word2index_vocab.update({_eos: len(vocab), _unk: len(vocab)+1})
+    word2index_vocab.update({_eos: len(word2index_vocab), _unk: len(word2index_vocab)+1})
     return word2index_vocab
 
 # =============================================================================
