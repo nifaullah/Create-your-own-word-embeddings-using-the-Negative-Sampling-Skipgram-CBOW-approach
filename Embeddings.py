@@ -7,44 +7,28 @@ Created on Mon Mar  2 17:35:43 2020
 import os
 import numpy as np
 import pandas as pd
-import IMDB_utils 
+import re
+import IMDB_utils as imdb
+import TestUtils_Embeddings as test
 import keras
 from keras.layers import Input, Embedding, Dense, Flatten
 from keras.models import Model, Sequential, load_model
 from random import sample
 import tensorflow as tf
 import warnings
+from sklearn.utils import shuffle
 
 # To ignore Keras pre-emptive sparse vector warning
-# Issue mentioned here - https://github.com/matterport/Mask_RCNN/issues/749
+# Issue mentioned here - https://github.com/matterpo+
++rt/Mask_RCNN/issues/749
 warnings.filterwarnings('ignore')
 # Path where you want to store your dataset
-_path = "C:/Users/nifaullah/Downloads/msba/WinBreak/DLA/Sentiment_Analysis_RNN_IMDB/Datasets/"
+_path = ""
 # Token for words not in dictionary
 _unk = "<UNK>"
 # Token to recognize end of sentence
 _eos = "<EOS>"
 
-# =============================================================================
-# Function to clean dataset before processing. Here we lower case the review
-# column and remove HTML tags and punctuations. Ideally you don't want
-# prepositions or articles to be part of word vector but I will adress this in
-# future iterations.
-# Function takes dataframe as an input and returns a dataframe.
-# Input:
-#   1. df - Raw Dataframe
-# Output:
-#   1. Cleaned Dataframe
-# =============================================================================
-def CleanDataset(df):
-    df = df.copy()
-    #lower 
-    df.review = df.review.str.lower()
-    #Removing html tags
-    df.review = df.review.apply(lambda x: re.compile(r'<[^>]+>').sub('', str(x)))
-    #Removing Punctuations
-    df.review = df.review.str.replace('[^a-zA-Z ]', '')
-    return df
 
 # =============================================================================
 # Function to generate the vocabulary
@@ -77,7 +61,7 @@ def GetIndex2Word(word2index_vocab):
     return index2word_vocab
 
 
-# =============================================================================
+# ===================        ==========================================================
 # Function to create a locally contextualized corpus
 # Takes dataframe as an input - ideally this a column which contains all the 
 # text (for instance for the IMDB dataframe this will be review column typed
@@ -95,6 +79,7 @@ def CreateCorpus(df, name=""):
     _corpusfile = "corpus.txt"
     if not (os.path.isfile(f"{_path}{name}_{_corpusfile}")):
         corpus = ""
+        df = df.apply(lambda  x: " ".join(map(lambda y: y if y in word2index_vocab.keys()  else _unk, x.split())))
         for i in df.values:
             corpus = f"{corpus}{i[0]} {_eos} "
         textfile = open(f"{_path}{name}_{_corpusfile}", "w")
@@ -269,13 +254,11 @@ def BuildModel(vocab_size, emb_size):
 # =============================================================================
 def TrainModel(X_train, Y_train, vocab_size, emb_size = 300, window_size = 3, epochs = 1, optimizer = 'adam'):
     labels = []
-    print(X_train.shape)
-    print(Y_train.shape)
-    model = BuildModel(vocab_size, emb_size, window_size)
+    model = BuildModel(vocab_size, emb_size)
     model.compile(optimizer= optimizer,
               loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
               metrics=['accuracy'])
-    model.fit(X_train, Y_train, epochs=1, batch_size=128)
+    model.fit(X_train, Y_train, epochs=1, batch_size=64)
     return model
 
 # =============================================================================
@@ -297,20 +280,60 @@ def TrainModel(X_train, Y_train, vocab_size, emb_size = 300, window_size = 3, ep
 #   1. A numpy float array with shape (vocab_size, emb_size) containing the
 #       vectors for each word 
 # =============================================================================
-def BuildEmbeddings(df, force_train = False,max_occurences = 30, emb_size = 300, window_size = 3, corpus_name = "", epochs = 1, optimizer = 'adam'):
+def BuildEmbeddings(df, force_train = False,max_occurences = 30, emb_size = 300, window_size = 3, seq_len= 100,corpus_name = "", epochs = 1, optimizer = 'adam'):
     _model = "imdb_negative_sampling_model.h5"
     if (os.path.isfile(f"{_path}{_model}") and not force_train):
         model = load_model(f"{_path}{_model}")
         return model.layers[0].get_weights()[0]
-    df = CleanDataset(df)
+    df = imdb.CleanDataset(df)
     word2index_vocab = GetWord2Index(df,max_occurences)
     index2word_vocab = GetIndex2Word(word2index_vocab)
     corpus = CreateCorpus(df,corpus_name)
-    X,Y =  CreateNegativeSamplingContextTargetPairs(corpus, word2index_vocab, window_size, 1)
+    X,Y =  CreateNegativeSamplingContextTargetPairs(corpus, word2index_vocab, window_size, 5)
+    X,Y = shuffle(X,Y)
     model = TrainModel(X, Y, len(word2index_vocab), emb_size, epochs, optimizer)
     model.save(f"{_path}{_model}")
     return model.layers[0].get_weights()[0]
 
+def GetTokens(df, word2index_vocab, seq_len =  100):
+    max_len = 0
+    #df =  df.apply(lambda x: x.str.split())
+    tokens = np.full((len(df), 100), word2index_vocab[_eos])
+    index = 0
+    for i in df.values:
+        data_list = [word2index_vocab[x]
+                              if x in word2index_vocab.keys() else word2index_vocab[_eos]
+                              for x in i[0].split()]
+        max_len = seq_len if len(data_list) >= seq_len else len(data_list)
+        tokens[index, :max_len] = data_list[:max_len]
+        index += 1
+    return tokens
+
+
+
+def GetAll(train_df, test_df, force_train = False,max_occurences = 30, emb_size = 300, window_size = 3, seq_len= 100,corpus_name = "", epochs = 1, optimizer = 'adam'):
+    emb_dict = {}
+    emb_dict["Y_train"] = np.array(train_df.loc[:,1])
+    emb_dict["Y_test"] = np.array(test_df.loc[:,1])
+    train_data = imdb.CleanDataset(train_df.iloc[:,0].to_frame())
+    test_data = imdb.CleanDataset(test_df.iloc[:,0].to_frame())
+    emb_dict["word2index_vocab"] = GetWord2Index(train_data,max_occurences)
+    emb_dict["index2word_vocab"] = GetIndex2Word(emb_dict["word2index_vocab"])
+    emb_dict["corpus"] = CreateCorpus(train_data,corpus_name)
+    emb_dict["X_train"] = GetTokens(train_data, emb_dict["word2index_vocab"], seq_len = 100)
+    emb_dict["X_test"] = GetTokens(   test_data, emb_dict["word2index_vocab"], seq_len = 100)
+    _model = "imdb_negative_sampling_model.h5"
+    if (os.path.isfile(f"{_path}{_model}") and not force_train):
+        model = load_model(f"{_path}{_model}")
+        emb_dict["emb_layer "] = model.layers[0].get_weights()[0]
+        return emb_dict
+    X,Y =  CreateNegativeSamplingContextTargetPairs(corpus, word2index_vocab, window_size, 5)
+    X, Y = shuffle(X, Y)
+    model = TrainModel(X, Y, len(word2index_vocab), emb_size, epochs, optimizer)
+    model.save(f"{_path}{_model}")
+    emb_dict["emb_layer"] = model.layers[0].get_weights()[0]
+    return emb_dict
+    
 
 # =============================================================================
 # A sample test function to sanity check the output and also demonstrates
@@ -319,9 +342,13 @@ def BuildEmbeddings(df, force_train = False,max_occurences = 30, emb_size = 300,
 #    1. returns word_vector
 # =============================================================================
 def TestEmbeddings():
-    train_df, test_df = IMDB_utils.LoadImdbDatasets()
-    word_vector = BuildEmbeddings(train_df[["review"]], corpus_name = "imdb")
-    return word_vector
+    train_df, test_df = imdb.LoadImdbDatasets()
+    train_df = imdb.CleanDataset(train_df)
+    word2index_vocab = GetWord2Index(train_df,30)
+    index2word_vocab = GetIndex2Word(word2index_vocab)
+    word_vectors = BuildEmbeddings(train_df[["review"]], corpus_name = "imdb")
+    return word_vectors
 
-# Calling the test function to check the sanity of the code
+
+#Calling the test function to check the sanity of the code
 #word_vectors = TestEmbeddings()
